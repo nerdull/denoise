@@ -40,25 +40,25 @@ class Denoiser(object):
             raise ValueError("unknown mode '{:s}'!".format(mode))
         self.mode = mode
 
-    def _embed(self, a, m):
+    def _embed(self, x, m):
         '''
         Embed a 1D array into a 2D partial circulant matrix by cyclic left-shift.
         -----
         Arguments:
-            a: 1D array of floats
+            x: 1D array of floats
                 Input array.
             m: int
                 Number of rows of the constructed matrix.
         -----
         Returns:
-            A: 1D array of floats
+            X: 2D array of floats
                 Constructed partial circulant matrix.
         '''
-        a_ext = np.hstack((a, a[:m-1]))
-        shape = (m, a.size)
-        strides = (a_ext.strides[0], a_ext.strides[0])
-        A = np.lib.stride_tricks.as_strided(a_ext, shape, strides)
-        return A
+        x_ext = np.hstack((x, x[:m-1]))
+        shape = (m, x.size)
+        strides = (x_ext.strides[0], x_ext.strides[0])
+        X = np.lib.stride_tricks.as_strided(x_ext, shape, strides)
+        return X
 
     def _reduce(self, A):
         '''
@@ -78,12 +78,47 @@ class Denoiser(object):
         a = np.mean(np.lib.stride_tricks.as_strided(A_ext[:,m-1:], A.shape, strides), axis=0)
         return a
 
-    def _cross_validate(self, a, m):
+    def _denoise_for_expert(self, sequence, layer, gap, rank):
+        '''
+        Smooth a noisy sequence by means of low-rank approximation of its corresponding partial circulant matrix.
+        -----
+        Arguments:
+            sequence: 1D array of floats
+                Data sequence to be denoised.
+            layer: int
+                Number of leading rows selected from the matrix.
+            gap: float
+                Gap between the data levels on the left and right ends of the sequence.
+                A positive value means the right level is higher.
+            rank: int
+                Rank of the approximating matrix.
+        -----
+        Returns:
+            denoised: 1D array of floats
+                Smoothed sequence after denoise.
+        -----
+        Raises:
+            AssertionError
+                If condition 1 <= rank <= layer <= sequence.size cannot be fulfilled.
+        '''
+        assert 1 <= rank <= layer <= sequence.size
+        self.r = rank
+        # linear trend to be deducted
+        trend = np.linspace(0, gap, sequence.size)
+        X = self._embed(sequence-trend, layer)
+        # singular value decomposition
+        self.U, self.s, Vh = svd(X, full_matrices=False, overwrite_a=True, check_finite=False)
+        # low-rank approximation
+        A = self.U[:,:self.r] @ np.diag(self.s[:self.r]) @ Vh[:self.r]
+        denoised = self._reduce(A) + trend
+        return denoised
+
+    def _cross_validate(self, x, m):
         '''
         Check if the gap of boundary levels of the detrended sequence is within the estimated noise strength.
         -----
         Arguments:
-            a: 1D array of floats
+            x: 1D array of floats
                 Input array.
             m: int
                 Number of rows of the constructed matrix.
@@ -92,30 +127,30 @@ class Denoiser(object):
             valid: bool
                 Result of cross validation. True means the detrending procedure is valid.
         '''
-        A = self._embed(a, m)
-        self.U, self.s, self._Vh = svd(A, full_matrices=False, overwrite_a=True, check_finite=False)
-        # Search for noise components using the normalized total variation of the left singular vectors as an indicator.
+        X = self._embed(x, m)
+        self.U, self.s, self._Vh = svd(X, full_matrices=False, overwrite_a=True, check_finite=False)
+        # Search for noise components using the normalized mean total variation of the left singular vectors as an indicator.
         # The procedure runs in batch of every 10 singular vectors.
         self.r = 0
         while True:
             U_sub = self.U[:,self.r:self.r+10]
-            total_var = np.mean(np.abs(np.diff(U_sub,axis=0)), axis=0) / (np.amax(U_sub,axis=0) - np.amin(U_sub,axis=0))
+            NMTV = np.mean(np.abs(np.diff(U_sub,axis=0)), axis=0) / (np.amax(U_sub,axis=0) - np.amin(U_sub,axis=0))
             try:
                 # the threshold of 10% can in most cases discriminate noise components
-                self.r += np.argwhere(total_var > .1)[0,0]
+                self.r += np.argwhere(NMTV > .1)[0,0]
                 break
             except IndexError:
                 self.r += 10
         # estimate the noise strength, while r marks the first noise component
-        noise_stdev = np.sqrt(np.sum(self.s[self.r:]**2) / A.size)
+        noise_stdev = np.sqrt(np.sum(self.s[self.r:]**2) / X.size)
         # estimate the gap of boundary levels after detrend
-        gap = a[-self._k:].mean() - a[:self._k].mean()
-        valid = np.abs(gap) < noise_stdev
+        gap = np.abs(x[-self._k:].mean()-x[:self._k].mean())
+        valid = gap < noise_stdev
         return valid
 
     def _denoise_for_layman(self, sequence, layer):
         '''
-        Similar to the "expert" method, except that denoising parameters are searched autonomously.
+        Similar to the "expert" method, except that denoising parameters are optimized autonomously.
         -----
         Arguments:
             sequence: 1D array of floats
@@ -138,48 +173,13 @@ class Denoiser(object):
         # Initially, the code assumes no linear inclination.
         trend = np.zeros_like(sequence)
         # Iterate over the averaging length.
-        # In the worst case, iteration terminates when it is 1.
+        # In the worst case, iteration must terminate when it is 1.
         while not self._cross_validate(sequence-trend, layer):
             self._k -= 2
-            trend = (sequence[-self._k:].mean() - sequence[:self._k].mean()) * np.linspace(0, 1, sequence.size)
+            trend = np.linspace(0, sequence[-self._k:].mean()-sequence[:self._k].mean(), sequence.size)
         # low-rank approximation by using only signal components
-        A_s = self.U[:,:self.r] @ np.diag(self.s[:self.r]) @ self._Vh[:self.r]
-        denoised = self._reduce(A_s) + trend
-        return denoised
-
-    def _denoise_for_expert(self, sequence, layer, gap, rank):
-        '''
-        Smooth a noisy sequence by means of low-rank approximation of its corresponding partial circulant matrix.
-        -----
-        Arguments:
-            sequence: 1D array of floats
-                Data sequence to be denoised.
-            layer: int
-                Number of leading rows selected from the corresponding matrix.
-            gap: float
-                Gap between the data levels on the left and right ends of the sequence.
-                Positive value means the right level is higher.
-            rank: int
-                Rank of the approximating matrix.
-        -----
-        Returns:
-            denoised: 1D array of floats
-                Smoothed sequence after denoise.
-        -----
-        Raises:
-            AssertionError
-                If condition 1 <= rank <= layer <= sequence.size cannot be fulfilled.
-        '''
-        assert 1 <= rank <= layer <= sequence.size
-        self.r = rank
-        # linear trend to be deducted
-        trend = gap * np.linspace(0, 1, sequence.size)
-        A = self._embed(sequence-trend, layer)
-        # singular value decomposition
-        self.U, self.s, Vh = svd(A, full_matrices=False, overwrite_a=True, check_finite=False)
-        # low-rank approximation
-        A_s = self.U[:,:self.r] @ np.diag(self.s[:self.r]) @ Vh[:self.r]
-        denoised = self._reduce(A_s) + trend
+        A = self.U[:,:self.r] @ np.diag(self.s[:self.r]) @ self._Vh[:self.r]
+        denoised = self._reduce(A) + trend
         return denoised
 
     def denoise(self, *args, **kwargs):
