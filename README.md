@@ -1,3 +1,5 @@
+[![DOI](https://zenodo.org/badge/173396157.svg)](https://zenodo.org/badge/latestdoi/173396157)
+
 # 1D Spectrum Denoiser
 The Denoising algorithm is essentially derived from **singular value decomposition** (**SVD**).
 By first constructing a **partial circulant matrix** using the spectral data, the noise components are discriminated after SVD of the matrix.
