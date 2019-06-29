@@ -52,5 +52,8 @@ When the signal is absent, the noise mean is returned, which agrees with one's i
 
 ![quintet](./example.png)
 
+## Reference
+X.C. Chen _et al._, [_Phys. Rev. E_ **99**, 063320](https://doi.org/10.1103/PhysRevE.99.063320) (2019).
+
 ## License
 This repository is licensed under the **GNU GPLv3**.
