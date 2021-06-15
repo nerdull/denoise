@@ -55,5 +55,7 @@ When the signal is absent, the noise mean is returned, which agrees with one's i
 ## Reference
 X.C. Chen _et al._, [_Phys. Rev. E_ **99**, 063320](https://doi.org/10.1103/PhysRevE.99.063320) (2019).
 
+An [Open Access](https://pure.rug.nl/ws/portalfiles/portal/171908730/PhysRevE.99.063320.pdf) is kindly provided by the University of Groningen.
+
 ## License
 This repository is licensed under the **GNU GPLv3**.
